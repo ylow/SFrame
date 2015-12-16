@@ -29,7 +29,7 @@ make_library(pylambda_worker
   SOURCES
   pylambda_worker.cpp
   REQUIRES
-    tcmalloc logger process pylambda_worker_lib python_header_only
+    logger process pylambda_worker_lib python_header_only
   SHARED
 )
 
@@ -51,7 +51,7 @@ if(${R_INTEGRATION} AND NOT WIN32)
       SOURCES
         rcpplambda_worker.cpp
       REQUIRES
-        rcpplambda tcmalloc logger process RInside R ncurses
+        rcpplambda logger process RInside R ncurses
     )
 
     make_shared_library_from_static(rcpplambda_shared
