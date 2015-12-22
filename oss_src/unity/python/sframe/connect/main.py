@@ -11,9 +11,9 @@ of the BSD license. See the LICENSE file for details.
 '''
 
 from ..cython.cy_unity import UnityGlobalProxy
-from ..cython.cy_ipc import PyCommClient as Client
+from ..cython import cy_ipc
 from ..cython.cy_ipc import get_public_secret_key_pair
-from ..connect.server import LocalServer, RemoteServer
+from ..connect.server import LocalServer, RemoteServer, EmbededServer
 from ..connect import __SERVER__, __CLIENT__, _get_metric_tracker
 
 import decorator
@@ -28,6 +28,7 @@ __LOGGER__ = logging.getLogger(__name__)
 
 LOCAL_SERVER_TYPE = 'local'
 REMOTE_SERVER_TYPE = 'remote'
+EMBEDED_SERVER_TYPE = 'embeded'
 
 ENGINE_START_ERROR_MESSAGE = 'Cannot connect to SFrame engine. ' + \
     'If you believe this to be a bug, check https://github.com/dato-code/SFrame/issues for known issues.'
@@ -60,8 +61,8 @@ def __catch_and_log__(func, *args, **kargs):
 
 
 @__catch_and_log__
-def launch(server_addr=None, server_bin=None, server_log=None, auth_token=None,
-           server_public_key=''):
+def launch(server_addr=None, server_bin=None,
+           server_log=None, auth_token=None, server_public_key=''):
     """
     Launch a connection to the graphlab server. The connection can be stopped by
     the `stop` function.
@@ -86,13 +87,16 @@ def launch(server_addr=None, server_bin=None, server_log=None, auth_token=None,
         The path to the server log (local server only).
 
     server_public_key : string
-        The server's libsodium public key, used for encryption. Default is no encryption. 
+        The server's libsodium public key, used for encryption. Default is no encryption.
     """
     if is_connected():
         __LOGGER__.warning(
             "Attempt to connect to a new server while still connected to a server."
             " Please stop the connection first by running 'graphlab.stop()' and try again.")
         return
+
+    if server_addr is None:
+        server_addr = 'inproc://sframe_server'
 
     try:
         server_type = _get_server_type(server_addr)
@@ -103,15 +107,18 @@ def launch(server_addr=None, server_bin=None, server_log=None, auth_token=None,
         return
 
     # Check that the unity_server binary exists
-    if not hasattr(_DEFAULT_CONFIG, 'server_bin') and server_bin is None:
-        __LOGGER__.error("Could not find a unity_server binary. Please try reinstalling.")
-        raise AssertionError
-
-    # Test that the unity_server binary works
-    _verify_engine_binary(_DEFAULT_CONFIG.server_bin if server_bin is None else server_bin)
+    if server_type == LOCAL_SERVER_TYPE:
+        if not hasattr(_DEFAULT_CONFIG, 'server_bin') and server_bin is None:
+            __LOGGER__.error("Could not find a unity_server binary. Please try reinstalling.")
+            raise AssertionError
+        # Test that the unity_server binary works
+        _verify_engine_binary(_DEFAULT_CONFIG.server_bin if server_bin is None else server_bin)
 
     # construct a server instance based on the server_type
-    if (server_type == LOCAL_SERVER_TYPE):
+    if (server_type == EMBEDED_SERVER_TYPE):
+        server = EmbededServer(server_addr, server_log)
+    # the following server mode is deprecated
+    elif (server_type == LOCAL_SERVER_TYPE):
         server = LocalServer(server_addr, server_bin, server_log)
     elif (server_type == REMOTE_SERVER_TYPE):
         server = RemoteServer(server_addr, auth_token, public_key=server_public_key)
@@ -127,28 +134,35 @@ def launch(server_addr=None, server_bin=None, server_log=None, auth_token=None,
         return
 
     # start the client
-    (public_key, secret_key) = ('', '')
-    if server_public_key != '':
-       (public_key, secret_key) = get_public_secret_key_pair()
-    try:
-        num_tolerable_ping_failures = 4294967295
-        client = Client([], server.get_server_addr(), num_tolerable_ping_failures,
-                        public_key=public_key, secret_key=secret_key,
-                        server_public_key=server_public_key)
-        if hasattr(server, 'proc') and hasattr(server.proc, 'pid'):
-            client.set_server_alive_watch_pid(server.proc.pid)
-        if(auth_token is not None):
-            client.add_auth_method_token(auth_token)
-        client.start()
-    except Exception as e:
-        __LOGGER__.error("Cannot start client: %s" % e)
-        if (client):
-            client.stop()
-        return
+    if (server_type == EMBEDED_SERVER_TYPE):
+        client = cy_ipc.make_comm_client_from_existing_ptr(server.get_client_ptr())
+    else:
+        (public_key, secret_key) = ('', '')
+        if server_public_key != '':
+            (public_key, secret_key) = get_public_secret_key_pair()
+        try:
+            num_tolerable_ping_failures = 4294967295
+            client = cy_ipc.make_comm_client(
+                            server.get_server_addr(),
+                            num_tolerable_ping_failures,
+                            public_key=public_key,
+                            secret_key=secret_key,
+                            server_public_key=server_public_key)
+            if hasattr(server, 'proc') and hasattr(server.proc, 'pid'):
+                client.set_server_alive_watch_pid(server.proc.pid)
+            if(auth_token is not None):
+                client.add_auth_method_token(auth_token)
+            client.start()
+        except Exception as e:
+            __LOGGER__.error("Cannot start client: %s" % e)
+            if (client):
+                client.stop()
+            return
 
     _assign_server_and_client(server, client)
 
     assert is_connected()
+
 
 def _get_server_type(server_addr):
     """
@@ -163,7 +177,7 @@ def _get_server_type(server_addr):
     Returns
     --------
     out : server_type
-        {'local', 'remote'}
+        {'local', 'remote', 'embeded'}
 
     Raises
     -------
@@ -173,8 +187,8 @@ def _get_server_type(server_addr):
     # construct the server object
     # Depending on what are the parameters provided, decide to either
     # start a remote server or a local server
-    if server_addr is None:
-        server_type = LOCAL_SERVER_TYPE
+    if server_addr.startswith('inproc'):
+        server_type = EMBEDED_SERVER_TYPE
     elif server_addr.startswith('tcp'):
         server_type = REMOTE_SERVER_TYPE
     elif server_addr.startswith('ipc'):

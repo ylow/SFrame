@@ -11,7 +11,7 @@ This software may be modified and distributed under the terms
 of the BSD license. See the LICENSE file for details.
 '''
 
-from ..cython.cy_ipc import PyCommClient as Client
+from ..cython import cy_ipc
 from ..cython.cy_ipc import get_public_secret_key_pair
 from ..util.config import DEFAULT_CONFIG as default_local_conf
 from ..connect import _get_metric_tracker
@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import time
+from ctypes import *
 
 
 class GraphLabServer(object):
@@ -55,8 +56,68 @@ class GraphLabServer(object):
         raise NotImplementedError
 
 
+class EmbededServer(GraphLabServer):
+    """
+    Embeded Server loads unity_server into the same process as shared library.
+    """
+
+    def __init__(self, server_address, unity_log_file):
+        """
+        @param unity_log_file string The path to the server logfile.
+        """
+        self.server_addr = server_address
+        self.unity_log = unity_log_file
+        self.logger = logging.getLogger(__name__)
+
+        root_path = os.path.dirname(os.path.abspath(__file__))
+        root_path = os.path.abspath(os.path.join(root_path, os.pardir))
+        self.root_path = root_path
+
+        self.dll = CDLL(os.path.join(root_path, 'libunity_server_embeded.so'))
+
+        if not self.unity_log:
+            self.unity_log = default_local_conf.get_unity_log()
+
+    def __del__(self):
+        self.stop()
+
+    def get_server_addr(self):
+        return self.server_addr
+
+    def start(self):
+        _get_metric_tracker().track('engine-started', value=1, send_sys_info=True)
+        _get_metric_tracker().track('engine-started-embeded', value=1)
+
+        if sys.platform == 'win32':
+            self.unity_log += ".0"
+
+        server_env = _sys_util.make_unity_server_env()
+        os.environ.update(server_env)
+
+        self.dll.start_embeded_server.argtypes = [c_char_p, c_char_p, c_char_p]
+        self.dll.start_embeded_server(self.root_path, self.server_addr, self.unity_log)
+
+        self.logger.info('Server started. ' + 'Server log: ' + self.unity_log)
+
+    def get_client_ptr(self):
+        """
+        Embeded server automatically constructs a client object
+        Call this function to get pointer to a ready to use client
+        """
+        self.dll.get_embeded_client.restype = c_void_p
+        return self.dll.get_embeded_client()
+
+    def stop(self):
+        self.dll.stop_embeded_server()
+
+    def get_logger(self):
+        return self.logger
+
+
 class LocalServer(GraphLabServer):
     """
+    Deprecated.
+
     Local GraphLab Server wraps the graphlab
     unity_server process and implements the GraphLabServer interface.
     """
@@ -90,7 +151,7 @@ class LocalServer(GraphLabServer):
         # Either both or neither encryption keys must be set.
         assert(bool(public_key) == bool(secret_key))
 
-        if not self.server_addr:
+        if self.server_addr is None:
             # by default we use '/tmp/graphlab_server-$pid-$timestamp'
             # where the pid is the server process id
             # and timestamp is the current timestamp
@@ -156,7 +217,7 @@ class LocalServer(GraphLabServer):
                 self.proc = subprocess.Popen(arglist,
                         env=_sys_util.make_unity_server_env(),
                         stdin=subprocess.PIPE, stdout=FNULL,
-                        stderr=None, bufsize=-1) # preexec_fn not supported on windows
+                        stderr=None, bufsize=-1)  # preexec_fn not supported on windows
             else:
                 self.proc = subprocess.Popen(arglist,
                         env=_sys_util.make_unity_server_env(),
@@ -194,9 +255,9 @@ class LocalServer(GraphLabServer):
             # OK, server is alive, try create a client and connect
             if (server_alive):
                 try:
-                    c = Client([], self.server_addr, num_tolerable_ping_failures,
-                               public_key=client_public_key, secret_key=client_secret_key,
-                               server_public_key=self.public_key)
+                    c = cy_ipc.make_comm_client(self.server_addr, num_tolerable_ping_failures,
+                                                public_key=client_public_key, secret_key=client_secret_key,
+                                                server_public_key=self.public_key)
                     if self.auth_token:
                         c.add_auth_method_token(self.auth_token)
                     c.set_server_alive_watch_pid(self.proc.pid)
@@ -261,6 +322,8 @@ class LocalServer(GraphLabServer):
 
 class RemoteServer(GraphLabServer):
     """
+    Deprecated.
+
     The class which manages the connection to a remote unity_server.
     """
     def __init__(self, server_addr, auth_token=None, public_key=''):
@@ -299,14 +362,14 @@ class RemoteServer(GraphLabServer):
         if self.public_key != '':
             (client_public_key, client_secret_key) = get_public_secret_key_pair()
         try:
-            c = Client([], self.server_addr, num_tolerable_ping_failures,
-                       public_key=client_public_key, secret_key=client_secret_key,
-                       server_public_key=self.public_key)
+            c = cy_ipc.make_comm_client(self.server_addr, num_tolerable_ping_failures,
+                                        public_key=client_public_key, secret_key=client_secret_key,
+                                        server_public_key=self.public_key)
             if self.auth_token:
                 c.add_auth_method_token(self.auth_token)
             c.start()
         finally:
-          c.stop()
+            c.stop()
 
     def stop(self):
         pass
