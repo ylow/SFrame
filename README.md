@@ -1,6 +1,8 @@
 SFrame
 ======
 
+pika pika
+
 Scalable tabular (**SFrame**, **SArray**) and graph (**SGraph**) data-structures built for out-of-core data analysis. 
 
 The SFrame package provides the complete implementation of:
