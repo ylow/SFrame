@@ -443,7 +443,7 @@ class SArray(object):
         return extensions.date_range(start_time,end_time,freq.total_seconds())
 
     @classmethod
-    def from_const(cls, value, size):
+    def from_const(cls, value, size, dtype=type(None)):
         """
         Constructs an SArray of size with a const value.
 
@@ -453,18 +453,26 @@ class SArray(object):
           The value to fill the SArray
         size : int
           The size of the SArray
+        dtype : type
+          The type of the SArray. If not specified, is automatically detected
+          from the value. This should be specified if value=None since the
+          actual type of the SArray can be anything.
 
         Examples
         --------
         Construct an SArray consisting of 10 zeroes:
 
         >>> graphlab.SArray.from_const(0, 10)
+
+        Construct an SArray consisting of 10 missing string values:
+
+        >>> graphlab.SArray.from_const(None, 10, str)
         """
         assert isinstance(size, (int, long)) and size >= 0, "size must be a positive int"
         if not isinstance(value, (type(None), int, float, str, array.array, list, dict, datetime.datetime)):
             raise TypeError('Cannot create sarray of value type %s' % str(type(value)))
         proxy = UnitySArrayProxy(glconnect.get_client())
-        proxy.load_from_const(value, size)
+        proxy.load_from_const(value, size, dtype)
         return cls(_proxy=proxy)
 
     @classmethod
@@ -1157,6 +1165,13 @@ class SArray(object):
         else:
             raise IndexError("Invalid type to use for indexing")
 
+    def materialize(self):
+        """
+        For a SArray that is lazily evaluated, force persist this sarray
+        to disk, committing all lazy evaluated operations.
+        """
+        return self.__materialize__()
+
     def __materialize__(self):
         """
         For a SArray that is lazily evaluated, force persist this sarray
@@ -1164,6 +1179,12 @@ class SArray(object):
         """
         with cython_context():
             self.__proxy__.materialize()
+
+    def is_materialized(self):
+        """
+        Returns whether or not the sarray has been materialized.
+        """
+        return self.__is_materialized__()
 
     def __is_materialized__(self):
         """

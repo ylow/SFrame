@@ -1525,6 +1525,30 @@ class SArrayTest(unittest.TestCase):
         self.assertEquals(list(g), [None] * 100)
         self.assertEqual(g.dtype(), float)
 
+        g = SArray.from_const(None, 100, str)
+        self.assertEquals(list(g), [None] * 100)
+        self.assertEqual(g.dtype(), str)
+
+        g = SArray.from_const(0, 100, float)
+        self.assertEquals(list(g), [0.0] * 100)
+        self.assertEqual(g.dtype(), float)
+
+        g = SArray.from_const(0.0, 100, int)
+        self.assertEquals(list(g), [0] * 100)
+        self.assertEqual(g.dtype(), int)
+
+        g = SArray.from_const(None, 100, float)
+        self.assertEquals(list(g), [None] * 100)
+        self.assertEqual(g.dtype(), float)
+
+        g = SArray.from_const(None, 100, int)
+        self.assertEquals(list(g), [None] * 100)
+        self.assertEqual(g.dtype(), int)
+
+        g = SArray.from_const(None, 100, list)
+        self.assertEquals(list(g), [None] * 100)
+        self.assertEqual(g.dtype(), list)
+
     def test_from_sequence(self):
         with self.assertRaises(TypeError):
             g = SArray.from_sequence()
@@ -2707,3 +2731,10 @@ class SArrayTest(unittest.TestCase):
         sa = SArray([test_val])
         expected = [86401.0]
         self.__test_equal(sa, expected, float)
+
+    def test_materialize(self):
+        sa= SArray(range(100))
+        sa = sa[sa > 10]
+        self.assertFalse(sa.is_materialized())
+        sa.materialize()
+        self.assertTrue(sa.is_materialized())
