@@ -142,7 +142,7 @@ bool init_param_from_zookeeper(dc_init_param& param) {
   return true;
 #else
   std::cerr << "Zookeeper Support not compiled!" << std::endl;
-  exit(0);
+  return false;
 #endif
 }
 
