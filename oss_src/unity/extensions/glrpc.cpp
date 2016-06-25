@@ -76,6 +76,7 @@ class param_server : public graphlab::toolkit_class_base {
         }
       }
     }
+    rmi->full_barrier();
   }
 
   std::vector<float> get_elem(size_t elemid) {
