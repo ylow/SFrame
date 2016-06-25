@@ -56,44 +56,48 @@ class param_server : public graphlab::toolkit_class_base {
     std::vector<float> data_copy(data, data + numel);
     procid_t target_machine = elemid % rmi->numprocs();
 
-    if (target_machine == rmi->procid()) {
-      local_add_gradient(elemid, data_copy);
+    std::vector<float> delta_gradient(data_copy.size());
+    if (local_contrib[elemid].size() == 0) {
+      delta_gradient = data_copy;
     } else {
-      rmi->RPC_CALL(remote_call, param_server::local_add_gradient)(target_machine, elemid, data_copy);
+      for (size_t i = 0;i < data_copy.size(); ++i) {
+        delta_gradient[i] = data_copy[i] - local_contrib[elemid][i];
+      }
+    }
+    local_contrib[elemid] = data_copy;
+
+    if (target_machine == rmi->procid()) {
+      accumulate_gradient(elemid, delta_gradient);
+    } else {
+      rmi->RPC_CALL(remote_call, param_server::accumulate_gradient)(target_machine, elemid, delta_gradient);
     }
   }
 
   void sync() {
     rmi->full_barrier();
-    // broadcast results
-    for (size_t elemid = 0;elemid < local_elements.size(); ++elemid) {
-      if (elemid % rmi->numprocs() == rmi->procid()) {
-        // I am the master for this element. broadcat
-        for (size_t p = 0; p < rmi->numprocs(); ++p) {
-          if (p != rmi->procid()) {
-            rmi->RPC_CALL(remote_call, param_server::local_add_gradient)(p, elemid, local_elements[elemid]);
-          }
-        }
-      }
-    }
-    rmi->full_barrier();
+    clear(all_elements.size());
   }
 
   std::vector<float> get_elem(size_t elemid) {
-    return local_elements[elemid];
+    return all_elements[elemid];
   }
 
   void clear(size_t numel) {
-    local_elements.clear();
-    local_elements.resize(numel);
+    all_elements.clear();
+    all_elements.resize(numel);
+    num_updates.resize(numel);
+    local_contrib.resize(numel);
+  }
+  void set_gradient(size_t elemid, const std::vector<float>& data) {
+    all_elements[elemid] = data;
   }
 
-  void local_add_gradient(size_t elemid, const std::vector<float>& data) {
-    if (elemid >= local_elements.size()) {
+  void accumulate_gradient(size_t elemid, const std::vector<float>& data) {
+    if (elemid >= all_elements.size()) {
       std::cerr << "BAD no such elem!" << std::endl;
       return;
     }
-    std::vector<float>& localelem = local_elements[elemid];
+    std::vector<float>& localelem = all_elements[elemid];
     if (localelem.size() > 0 && localelem.size() != data.size()) {
       std::cerr << "BAD. Size mismatch!" << std::endl;
       return;
@@ -101,6 +105,14 @@ class param_server : public graphlab::toolkit_class_base {
       localelem = data;
     } else {
       for (size_t i = 0;i < data.size(); ++i) localelem[i] += data[i];
+    }
+
+    int n = __sync_fetch_and_add(&(num_updates[elemid]), 1);
+    // async broadcast
+    if (n % rmi->numprocs() == 0) {
+      for (size_t p = 0; p < rmi->numprocs(); ++p) {
+        if (p != rmi->procid()) rmi->RPC_CALL(remote_call, param_server::set_gradient)(p, elemid, localelem);
+      }
     }
   }
 
@@ -114,7 +126,9 @@ class param_server : public graphlab::toolkit_class_base {
 
  private:
    std::unique_ptr<dc_dist_object<param_server>> rmi;
-   std::vector<std::vector<float>> local_elements;
+   std::vector<std::vector<float>> all_elements;
+   std::vector<int> num_updates;
+   std::vector<std::vector<float>> local_contrib;
 };
 
 BEGIN_FUNCTION_REGISTRATION
