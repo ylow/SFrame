@@ -78,18 +78,56 @@ class param_server : public graphlab::toolkit_class_base {
     synclock.unlock();
   }
 
+  void accumulate_gradient(size_t elemid, size_t ptr_to_data, size_t numel) {
+    float* data = reinterpret_cast<float*>(ptr_to_data);
+    std::vector<float> adata(data, data + numel);
+    locks[elemid].lock();
+    auto& targ = all_elements[elemid][rmi->procid()];
+    if (targ.size() != adata.size()) {
+      targ = adata;
+    } else {
+      for (size_t i = 0;i < targ.size(); ++i) targ[i] += adata[i];
+    }
+    locks[elemid].unlock();
+    synclock.lock();
+    bitset.set_bit(elemid);
+    cvar.signal(); 
+    synclock.unlock();
+  }
+
   void sync() {
     rmi->full_barrier();
   }
 
   void get_elem_to_ptr(size_t elemid, size_t ptr_to_data, size_t numel) {
     float* data = reinterpret_cast<float*>(ptr_to_data);
-    //memcpy((void*)(data), reinterpret_cast<void*>(&(all_elements[elemid][rmi->procid()][0])), all_elements[elemid][rmi->procid()].size() * 4);
+    memcpy((void*)(data), 
+           reinterpret_cast<void*>(&(all_elements[elemid][rmi->procid()][0])), 
+           all_elements[elemid][rmi->procid()].size() * sizeof(float));
 
-    for (size_t i = 1;i < all_elements[elemid].size(); ++i) {
+    for (size_t i = 0;i < all_elements[elemid].size(); ++i) {
       if (i == rmi->procid()) continue;
       const auto& e = all_elements[elemid][i];
       if (numel == e.size()) for (size_t j = 0;j < e.size(); ++j) data[j] += e[j];
+    }
+  }
+
+  void get_elem_to_ptr_average(size_t elemid, size_t ptr_to_data, size_t numel) {
+    float* data = reinterpret_cast<float*>(ptr_to_data);
+    memcpy((void*)(data), 
+           reinterpret_cast<void*>(&(all_elements[elemid][rmi->procid()][0])), 
+           all_elements[elemid][rmi->procid()].size() * sizeof(float));
+    int denom = 1;
+    for (size_t i = 0;i < all_elements[elemid].size(); ++i) {
+      if (i == rmi->procid()) continue;
+      const auto& e = all_elements[elemid][i];
+      if (numel == e.size()) {
+        ++denom;
+        for (size_t j = 0;j < e.size(); ++j) data[j] += e[j];
+      }
+    }
+    for (size_t i = 0;i < numel; ++i) {
+      data[i] /= denom;
     }
   }
 
@@ -138,8 +176,10 @@ class param_server : public graphlab::toolkit_class_base {
   REGISTER_CLASS_MEMBER_FUNCTION(param_server::clear, "numelem")
   REGISTER_CLASS_MEMBER_FUNCTION(param_server::get_elem, "elemid")
   REGISTER_CLASS_MEMBER_FUNCTION(param_server::get_elem_to_ptr, "elemid", "ptr", "len")
+  REGISTER_CLASS_MEMBER_FUNCTION(param_server::get_elem_to_ptr_average, "elemid", "ptr", "len")
   REGISTER_CLASS_MEMBER_FUNCTION(param_server::sync)
   REGISTER_CLASS_MEMBER_FUNCTION(param_server::add_gradient, "elemid", "ptr", "len")
+  REGISTER_CLASS_MEMBER_FUNCTION(param_server::accumulate_gradient, "elemid", "ptr", "len")
   REGISTER_CLASS_MEMBER_FUNCTION(param_server::init)
   END_CLASS_MEMBER_REGISTRATION
 
