@@ -18,6 +18,7 @@ make_extension(json SOURCES
 )
 make_extension(random_sframe_generation SOURCES random_sframe_generation.cpp)
 make_extension(glrpc SOURCES glrpc.cpp REQUIRES rpc)
+make_extension(glrpc2 SOURCES glrpc2.cpp REQUIRES rpc)
 
 #----------------------------
 set_property(DIRECTORY PROPERTY EXTENSIONS_LIST "${EXTENSIONS_LIST}")
