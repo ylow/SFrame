@@ -93,6 +93,7 @@ class param_server : public graphlab::toolkit_class_base {
 
     for (size_t i = 0;i < all_elements.size(); ++i) {
       if (i % rmi->numprocs() != rmi->procid()) {
+        futures[i]();
         locks[i].lock();
         all_elements[i] = std::move(futures[i]());
         locks[i].unlock();
@@ -110,6 +111,7 @@ class param_server : public graphlab::toolkit_class_base {
 
   void clear(size_t numel) {
     all_elements.resize(numel);
+    ctr.resize(numel);
     for (size_t i = 0;i < numel; ++i) all_elements[i].resize(rmi->numprocs());
     locks.resize(numel);
   }
@@ -118,14 +120,20 @@ class param_server : public graphlab::toolkit_class_base {
     locks[elemid].lock();
     all_elements[elemid] = data;
     locks[elemid].unlock();
+    if (elemid % rmi->numprocs() == rmi->procid()) {
+      rmi->RPC_CALL(broadcast_call, param_server::set_gradient_remote)(allprocs_except_me.begin(), allprocs_except_me.end(), elemid, data); 
+    }
   }
 
   void accumulate_gradient_remote(size_t elemid, const std::vector<float>& data) {
-    locks[elemid].lock();
     for (size_t i = 0;i < data.size(); ++i) {
       all_elements[elemid][i] += data[i];
     }
-    locks[elemid].unlock();
+    ctr[elemid]++;
+    bool tosync = (ctr[elemid] % rmi->numprocs() == 0);
+    if (tosync && elemid % rmi->numprocs() == rmi->procid()) {
+      rmi->RPC_CALL(broadcast_call, param_server::set_gradient_remote)(allprocs_except_me.begin(), allprocs_except_me.end(), elemid, all_elements[elemid]); 
+    }
   }
   std::vector<float> get_value_remote(size_t elemid) {
     auto ret = all_elements[elemid];
@@ -145,6 +153,7 @@ class param_server : public graphlab::toolkit_class_base {
  private:
    std::unique_ptr<dc_dist_object<param_server>> rmi;
    std::vector<std::vector<float>> all_elements;
+   std::vector<size_t> ctr;
    std::vector<mutex> locks;
    std::vector<procid_t> allprocs_except_me;
    
